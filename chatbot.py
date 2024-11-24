@@ -51,7 +51,6 @@ with open(store_info_file, "r") as f:
 # Initialize session state for chat history
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-
 # Function to display products as cards using Bootstrap
 def display_products(products):
     card_template = """
@@ -61,7 +60,10 @@ def display_products(products):
             <p class="card-text">
                 Weight: {Weight}<br>
                 Price: ${Price}<br>
-                Available Stock: {AvailableStock}
+                Available in:
+                <ul>
+                    {BranchesList}
+                </ul>
             </p>
         </div>
     </div>
@@ -69,24 +71,44 @@ def display_products(products):
     # Use Bootstrap grid system for cards
     html_content = '<div class="container"><div class="row">'
     for idx, product in enumerate(products):
-        html_content += f'<div class="col-md-4">{card_template.format(**product)}</div>'
+        branches_list = "".join(
+            [f"<li>{branch['BranchName']} - Stock: {branch['AvailableStock']}</li>" for branch in product["Branches"]]
+        )
+        html_content += f'<div class="col-md-4">{card_template.format(BranchesList=branches_list, **product)}</div>'
         if (idx + 1) % 3 == 0:
             html_content += '</div><div class="row">'  # Close and start a new row
     html_content += '</div></div>'  # Close the last row and container
-    
+
     st.markdown(html_content, unsafe_allow_html=True)
 
-# Function to search for products
+# Function to search for products across branches
 def search_products(query=None):
-    if not query:
-        return products_data
-    else:
-        # Filter products based on search query
-        return [
-            product
-            for product in products_data
-            if query.lower() in product["ProductName"].lower() or query.lower() in product["Category"].lower()
-        ]
+    results = {}
+    query = query.lower() if query else ""
+
+    # Iterate through branches and their products
+    for branch in products_data["branches"]:
+        branch_name = branch["BranchName"]
+        for stock in branch["ProductStock"]:
+            # Match product details with the stock entry
+            product = next((prod for prod in products_data["Products"] if prod["ProductID"] == stock["ProductID"]), None)
+            if product:
+                # Check if the query matches product name or category
+                if not query or query in product["ProductName"].lower() or query in product["Category"].lower():
+                    product_id = product["ProductID"]
+                    if product_id not in results:
+                        results[product_id] = {
+                            "ProductName": product["ProductName"],
+                            "Weight": product["Weight"],
+                            "Price": product["Price"],
+                            "Branches": [],
+                        }
+                    results[product_id]["Branches"].append({
+                        "BranchName": branch_name,
+                        "AvailableStock": stock["AvailableStock"]
+                    })
+    return list(results.values())
+
 
 # Multi-Language Support
 def detect_language(text):
@@ -292,10 +314,20 @@ if user_prompt:
             f"Membership Plans: {', '.join([f'{plan.replace('_', ' ').title()} - {details['price']} ({', '.join(details['benefits'])})' for plan, details in store_info_data['membership_plans'].items()])}\n"
             f"FAQs: {', '.join([faq['question'] for faq in store_info_data['faqs']])}\n"
         )
-        product_context = "Products:\n" + "\n".join(
-            [f"{product['ProductName']} - {product['Weight']} - ${product['Price']} (Stock: {product['AvailableStock']})"
-             for product in products_data]
-        )
+       # Generate product context for each branch
+        branch_product_context = []
+        for branch in products_data["branches"]:
+            branch_name = branch["BranchName"]
+            branch_products = []
+            for stock in branch["ProductStock"]:
+                product_info = next(product for product in products_data["Products"] if product["ProductID"] == stock["ProductID"])
+                branch_products.append(
+                    f"{product_info['ProductName']} - {product_info['Weight']} - ${product_info['Price']} (Stock: {stock['AvailableStock']})"
+                )
+            branch_product_context.append(f"{branch_name}:\n" + "\n".join(branch_products))
+
+        product_context = "Products by Branch:\n\n" + "\n\n".join(branch_product_context)
+
 
         # Combine context
         combined_context = f"Store Information:\n{store_context}\n\n{product_context}"
